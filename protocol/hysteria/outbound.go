@@ -43,7 +43,7 @@ func NewOutbound(ctx context.Context, router adapter.Router, logger log.ContextL
 	if options.TLS == nil || !options.TLS.Enabled {
 		return nil, C.ErrTLSRequired
 	}
-	tlsConfig, err := tls.NewClient(ctx, options.Server, common.PtrValueOrDefault(options.TLS))
+	tlsConfig, err := tls.NewClient(ctx, logger, options.Server, common.PtrValueOrDefault(options.TLS))
 	if err != nil {
 		return nil, err
 	}
@@ -70,21 +70,19 @@ func NewOutbound(ctx context.Context, router adapter.Router, logger log.ContextL
 		receiveBps = uint64(options.DownMbps) * hysteria.MbpsToBps
 	}
 	client, err := hysteria.NewClient(hysteria.ClientOptions{
-		Context:             ctx,
-		Dialer:              outboundDialer,
-		Logger:              logger,
-		ServerAddress:       options.ServerOptions.Build(),
-		ServerPorts:         options.ServerPorts,
-		HopInterval:         time.Duration(options.HopInterval),
-		SendBPS:             sendBps,
-		ReceiveBPS:          receiveBps,
-		XPlusPassword:       options.Obfs,
-		Password:            password,
-		TLSConfig:           tlsConfig,
-		UDPDisabled:         !common.Contains(networkList, N.NetworkUDP),
-		ConnReceiveWindow:   options.ReceiveWindowConn,
-		StreamReceiveWindow: options.ReceiveWindow,
-		DisableMTUDiscovery: options.DisableMTUDiscovery,
+		Context:       ctx,
+		Dialer:        outboundDialer,
+		Logger:        logger,
+		ServerAddress: options.ServerOptions.Build(),
+		ServerPorts:   options.ServerPorts,
+		HopInterval:   time.Duration(options.HopInterval),
+		SendBPS:       sendBps,
+		ReceiveBPS:    receiveBps,
+		XPlusPassword: options.Obfs,
+		Password:      password,
+		TLSConfig:     tlsConfig,
+		QUICOptions:   buildOutboundQUICOptions(options),
+		UDPDisabled:   !common.Contains(networkList, N.NetworkUDP),
 	})
 	if err != nil {
 		return nil, err

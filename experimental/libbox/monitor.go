@@ -1,7 +1,7 @@
 package libbox
 
 import (
-	"github.com/sagernet/sing-tun"
+	tun "github.com/sagernet/sing-tun"
 	"github.com/sagernet/sing/common/control"
 	E "github.com/sagernet/sing/common/exceptions"
 	"github.com/sagernet/sing/common/logger"
@@ -16,7 +16,6 @@ var (
 type platformDefaultInterfaceMonitor struct {
 	*platformInterfaceWrapper
 	logger      logger.Logger
-	element     *list.Element[tun.NetworkUpdateCallback]
 	callbacks   list.List[tun.DefaultInterfaceUpdateCallback]
 	myInterface string
 }

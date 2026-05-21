@@ -20,6 +20,7 @@ type InboundACMEOptions struct {
 	AlternativeTLSPort      uint16                      `json:"alternative_tls_port,omitempty"`
 	ExternalAccount         *ACMEExternalAccountOptions `json:"external_account,omitempty"`
 	DNS01Challenge          *ACMEDNS01ChallengeOptions  `json:"dns01_challenge,omitempty"`
+	Profile                 string                      `json:"profile,omitempty"`
 }
 
 type ACMEExternalAccountOptions struct {
@@ -31,6 +32,7 @@ type _ACMEDNS01ChallengeOptions struct {
 	Provider          string                     `json:"provider,omitempty"`
 	AliDNSOptions     ACMEDNS01AliDNSOptions     `json:"-"`
 	CloudflareOptions ACMEDNS01CloudflareOptions `json:"-"`
+	ACMEDNSOptions    ACMEDNS01ACMEDNSOptions    `json:"-"`
 }
 
 type ACMEDNS01ChallengeOptions _ACMEDNS01ChallengeOptions
@@ -42,6 +44,8 @@ func (o ACMEDNS01ChallengeOptions) MarshalJSON() ([]byte, error) {
 		v = o.AliDNSOptions
 	case C.DNSProviderCloudflare:
 		v = o.CloudflareOptions
+	case C.DNSProviderACMEDNS:
+		v = o.ACMEDNSOptions
 	case "":
 		return nil, E.New("missing provider type")
 	default:
@@ -61,6 +65,8 @@ func (o *ACMEDNS01ChallengeOptions) UnmarshalJSON(bytes []byte) error {
 		v = &o.AliDNSOptions
 	case C.DNSProviderCloudflare:
 		v = &o.CloudflareOptions
+	case C.DNSProviderACMEDNS:
+		v = &o.ACMEDNSOptions
 	default:
 		return E.New("unknown provider type: " + o.Provider)
 	}
@@ -75,8 +81,17 @@ type ACMEDNS01AliDNSOptions struct {
 	AccessKeyID     string `json:"access_key_id,omitempty"`
 	AccessKeySecret string `json:"access_key_secret,omitempty"`
 	RegionID        string `json:"region_id,omitempty"`
+	SecurityToken   string `json:"security_token,omitempty"`
 }
 
 type ACMEDNS01CloudflareOptions struct {
-	APIToken string `json:"api_token,omitempty"`
+	APIToken  string `json:"api_token,omitempty"`
+	ZoneToken string `json:"zone_token,omitempty"`
+}
+
+type ACMEDNS01ACMEDNSOptions struct {
+	Username  string `json:"username,omitempty"`
+	Password  string `json:"password,omitempty"`
+	Subdomain string `json:"subdomain,omitempty"`
+	ServerURL string `json:"server_url,omitempty"`
 }

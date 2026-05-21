@@ -25,9 +25,9 @@ type Listener struct {
 	logger                   logger.ContextLogger
 	network                  []string
 	listenOptions            option.ListenOptions
-	connHandler              adapter.ConnectionHandlerEx
-	packetHandler            adapter.PacketHandlerEx
-	oobPacketHandler         adapter.OOBPacketHandlerEx
+	connHandler              adapter.ConnectionHandler
+	packetHandler            adapter.PacketHandler
+	oobPacketHandler         adapter.OOBPacketHandler
 	threadUnsafePacketWriter bool
 	disablePacketOutput      bool
 	setSystemProxy           bool
@@ -48,9 +48,9 @@ type Options struct {
 	Logger                   logger.ContextLogger
 	Network                  []string
 	Listen                   option.ListenOptions
-	ConnectionHandler        adapter.ConnectionHandlerEx
-	PacketHandler            adapter.PacketHandlerEx
-	OOBPacketHandler         adapter.OOBPacketHandlerEx
+	ConnectionHandler        adapter.ConnectionHandler
+	PacketHandler            adapter.PacketHandler
+	OOBPacketHandler         adapter.OOBPacketHandler
 	ThreadUnsafePacketWriter bool
 	DisablePacketOutput      bool
 	SetSystemProxy           bool
@@ -151,6 +151,7 @@ func ListenNetworkNamespace[T any](nameOrPath string, block func() (T, error)) (
 		if err != nil {
 			return common.DefaultValue[T](), E.Cause(err, "get current netns")
 		}
+		defer currentNs.Close()
 		defer netns.Set(currentNs)
 		var targetNs netns.NsHandle
 		if strings.HasPrefix(nameOrPath, "/") {

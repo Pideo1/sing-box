@@ -18,6 +18,7 @@ type _RuleAction struct {
 	RouteOptions        RouteActionOptions        `json:"-"`
 	RouteOptionsOptions RouteOptionsActionOptions `json:"-"`
 	DirectOptions       DirectActionOptions       `json:"-"`
+	BypassOptions       RouteActionOptions        `json:"-"`
 	RejectOptions       RejectActionOptions       `json:"-"`
 	SniffOptions        RouteActionSniff          `json:"-"`
 	ResolveOptions      RouteActionResolve        `json:"-"`
@@ -38,6 +39,8 @@ func (r RuleAction) MarshalJSON() ([]byte, error) {
 		v = r.RouteOptionsOptions
 	case C.RuleActionTypeDirect:
 		v = r.DirectOptions
+	case C.RuleActionTypeBypass:
+		v = r.BypassOptions
 	case C.RuleActionTypeReject:
 		v = r.RejectOptions
 	case C.RuleActionTypeHijackDNS:
@@ -69,6 +72,8 @@ func (r *RuleAction) UnmarshalJSON(data []byte) error {
 		v = &r.RouteOptionsOptions
 	case C.RuleActionTypeDirect:
 		v = &r.DirectOptions
+	case C.RuleActionTypeBypass:
+		v = &r.BypassOptions
 	case C.RuleActionTypeReject:
 		v = &r.RejectOptions
 	case C.RuleActionTypeHijackDNS:
@@ -84,7 +89,11 @@ func (r *RuleAction) UnmarshalJSON(data []byte) error {
 		// check unknown fields
 		return json.UnmarshalDisallowUnknownFields(data, &_RuleAction{})
 	}
-	return badjson.UnmarshallExcluded(data, (*_RuleAction)(r), v)
+	err = badjson.UnmarshallExcluded(data, (*_RuleAction)(r), v)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 type _DNSRuleAction struct {
@@ -106,6 +115,10 @@ func (r DNSRuleAction) MarshalJSON() ([]byte, error) {
 	case C.RuleActionTypeRoute:
 		r.Action = ""
 		v = r.RouteOptions
+	case C.RuleActionTypeEvaluate:
+		v = r.RouteOptions
+	case C.RuleActionTypeRespond:
+		v = nil
 	case C.RuleActionTypeRouteOptions:
 		v = r.RouteOptionsOptions
 	case C.RuleActionTypeReject:
@@ -114,6 +127,9 @@ func (r DNSRuleAction) MarshalJSON() ([]byte, error) {
 		v = r.PredefinedOptions
 	default:
 		return nil, E.New("unknown DNS rule action: " + r.Action)
+	}
+	if v == nil {
+		return badjson.MarshallObjects((_DNSRuleAction)(r))
 	}
 	return badjson.MarshallObjects((_DNSRuleAction)(r), v)
 }
@@ -128,6 +144,10 @@ func (r *DNSRuleAction) UnmarshalJSONContext(ctx context.Context, data []byte) e
 	case "", C.RuleActionTypeRoute:
 		r.Action = C.RuleActionTypeRoute
 		v = &r.RouteOptions
+	case C.RuleActionTypeEvaluate:
+		v = &r.RouteOptions
+	case C.RuleActionTypeRespond:
+		v = nil
 	case C.RuleActionTypeRouteOptions:
 		v = &r.RouteOptionsOptions
 	case C.RuleActionTypeReject:
@@ -136,6 +156,9 @@ func (r *DNSRuleAction) UnmarshalJSONContext(ctx context.Context, data []byte) e
 		v = &r.PredefinedOptions
 	default:
 		return E.New("unknown DNS rule action: " + r.Action)
+	}
+	if v == nil {
+		return json.UnmarshalDisallowUnknownFields(data, &_DNSRuleAction{})
 	}
 	return badjson.UnmarshallExcludedContext(ctx, data, (*_DNSRuleAction)(r), v)
 }
@@ -159,6 +182,8 @@ type RawRouteOptionsActionOptions struct {
 	TLSFragment              bool               `json:"tls_fragment,omitempty"`
 	TLSFragmentFallbackDelay badoption.Duration `json:"tls_fragment_fallback_delay,omitempty"`
 	TLSRecordFragment        bool               `json:"tls_record_fragment,omitempty"`
+	TLSSpoof                 string             `json:"tls_spoof,omitempty"`
+	TLSSpoofMethod           string             `json:"tls_spoof_method,omitempty"`
 }
 
 type RouteOptionsActionOptions RawRouteOptionsActionOptions
@@ -178,18 +203,22 @@ func (r *RouteOptionsActionOptions) UnmarshalJSON(data []byte) error {
 }
 
 type DNSRouteActionOptions struct {
-	Server       string                `json:"server,omitempty"`
-	Strategy     DomainStrategy        `json:"strategy,omitempty"`
-	DisableCache bool                  `json:"disable_cache,omitempty"`
-	RewriteTTL   *uint32               `json:"rewrite_ttl,omitempty"`
-	ClientSubnet *badoption.Prefixable `json:"client_subnet,omitempty"`
+	Server                 string                `json:"server,omitempty"`
+	Timeout                badoption.Duration    `json:"timeout,omitempty"`
+	Strategy               DomainStrategy        `json:"strategy,omitempty"`
+	DisableCache           bool                  `json:"disable_cache,omitempty"`
+	DisableOptimisticCache bool                  `json:"disable_optimistic_cache,omitempty"`
+	RewriteTTL             *uint32               `json:"rewrite_ttl,omitempty"`
+	ClientSubnet           *badoption.Prefixable `json:"client_subnet,omitempty"`
 }
 
 type _DNSRouteOptionsActionOptions struct {
-	Strategy     DomainStrategy        `json:"strategy,omitempty"`
-	DisableCache bool                  `json:"disable_cache,omitempty"`
-	RewriteTTL   *uint32               `json:"rewrite_ttl,omitempty"`
-	ClientSubnet *badoption.Prefixable `json:"client_subnet,omitempty"`
+	Strategy               DomainStrategy        `json:"strategy,omitempty"`
+	Timeout                badoption.Duration    `json:"timeout,omitempty"`
+	DisableCache           bool                  `json:"disable_cache,omitempty"`
+	DisableOptimisticCache bool                  `json:"disable_optimistic_cache,omitempty"`
+	RewriteTTL             *uint32               `json:"rewrite_ttl,omitempty"`
+	ClientSubnet           *badoption.Prefixable `json:"client_subnet,omitempty"`
 }
 
 type DNSRouteOptionsActionOptions _DNSRouteOptionsActionOptions
@@ -282,6 +311,7 @@ func (r *RejectActionOptions) UnmarshalJSON(bytes []byte) error {
 	case "", C.RuleActionRejectMethodDefault:
 		r.Method = C.RuleActionRejectMethodDefault
 	case C.RuleActionRejectMethodDrop:
+	case C.RuleActionRejectMethodReply:
 	default:
 		return E.New("unknown reject method: " + r.Method)
 	}
@@ -297,11 +327,13 @@ type RouteActionSniff struct {
 }
 
 type RouteActionResolve struct {
-	Server       string                `json:"server,omitempty"`
-	Strategy     DomainStrategy        `json:"strategy,omitempty"`
-	DisableCache bool                  `json:"disable_cache,omitempty"`
-	RewriteTTL   *uint32               `json:"rewrite_ttl,omitempty"`
-	ClientSubnet *badoption.Prefixable `json:"client_subnet,omitempty"`
+	Server                 string                `json:"server,omitempty"`
+	Timeout                badoption.Duration    `json:"timeout,omitempty"`
+	Strategy               DomainStrategy        `json:"strategy,omitempty"`
+	DisableCache           bool                  `json:"disable_cache,omitempty"`
+	DisableOptimisticCache bool                  `json:"disable_optimistic_cache,omitempty"`
+	RewriteTTL             *uint32               `json:"rewrite_ttl,omitempty"`
+	ClientSubnet           *badoption.Prefixable `json:"client_subnet,omitempty"`
 }
 
 type DNSRouteActionPredefined struct {

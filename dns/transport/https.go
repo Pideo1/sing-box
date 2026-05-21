@@ -57,7 +57,7 @@ func NewHTTPS(ctx context.Context, logger log.ContextLogger, tag string, options
 	}
 	tlsOptions := common.PtrValueOrDefault(options.TLS)
 	tlsOptions.Enabled = true
-	tlsConfig, err := tls.NewClient(ctx, options.Server, tlsOptions)
+	tlsConfig, err := tls.NewClient(ctx, logger, options.Server, tlsOptions)
 	if err != nil {
 		return nil, err
 	}
@@ -138,11 +138,15 @@ func (t *HTTPSTransport) Start(stage adapter.StartStage) error {
 }
 
 func (t *HTTPSTransport) Close() error {
+	t.Reset()
+	return nil
+}
+
+func (t *HTTPSTransport) Reset() {
 	t.transportAccess.Lock()
 	defer t.transportAccess.Unlock()
 	t.transport.CloseIdleConnections()
 	t.transport = t.transport.Clone()
-	return nil
 }
 
 func (t *HTTPSTransport) Exchange(ctx context.Context, message *mDNS.Msg) (*mDNS.Msg, error) {
@@ -182,7 +186,10 @@ func (t *HTTPSTransport) exchange(ctx context.Context, message *mDNS.Msg) (*mDNS
 	request.Header = t.headers.Clone()
 	request.Header.Set("Content-Type", MimeType)
 	request.Header.Set("Accept", MimeType)
-	response, err := t.transport.RoundTrip(request)
+	t.transportAccess.Lock()
+	currentTransport := t.transport
+	t.transportAccess.Unlock()
+	response, err := currentTransport.RoundTrip(request)
 	requestBuffer.Release()
 	if err != nil {
 		return nil, err
@@ -194,12 +201,12 @@ func (t *HTTPSTransport) exchange(ctx context.Context, message *mDNS.Msg) (*mDNS
 	var responseMessage mDNS.Msg
 	if response.ContentLength > 0 {
 		responseBuffer := buf.NewSize(int(response.ContentLength))
+		defer responseBuffer.Release()
 		_, err = responseBuffer.ReadFullFrom(response.Body, int(response.ContentLength))
 		if err != nil {
 			return nil, err
 		}
 		err = responseMessage.Unpack(responseBuffer.Bytes())
-		responseBuffer.Release()
 	} else {
 		rawMessage, err = io.ReadAll(response.Body)
 		if err != nil {

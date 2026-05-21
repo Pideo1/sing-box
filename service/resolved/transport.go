@@ -32,7 +32,10 @@ func RegisterTransport(registry *dns.TransportRegistry) {
 	dns.RegisterTransport[option.ResolvedDNSServerOptions](registry, C.TypeResolved, NewTransport)
 }
 
-var _ adapter.DNSTransport = (*Transport)(nil)
+var (
+	_ adapter.DNSTransport                    = (*Transport)(nil)
+	_ adapter.DNSTransportWithPreferredDomain = (*Transport)(nil)
+)
 
 type Transport struct {
 	dns.TransportAdapter
@@ -110,6 +113,16 @@ func (t *Transport) Close() error {
 	return nil
 }
 
+func (t *Transport) Reset() {
+	t.linkAccess.RLock()
+	defer t.linkAccess.RUnlock()
+	for _, servers := range t.linkServers {
+		for _, server := range servers.Servers {
+			server.Reset()
+		}
+	}
+}
+
 func (t *Transport) updateTransports(link *TransportLink) error {
 	t.linkAccess.Lock()
 	defer t.linkAccess.Unlock()
@@ -129,7 +142,7 @@ func (t *Transport) updateTransports(link *TransportLink) error {
 			return os.ErrInvalid
 		}
 		if link.dnsOverTLS {
-			tlsConfig := common.Must1(tls.NewClient(t.ctx, serverAddr.String(), option.OutboundTLSOptions{
+			tlsConfig := common.Must1(tls.NewClient(t.ctx, t.logger, serverAddr.String(), option.OutboundTLSOptions{
 				Enabled:    true,
 				ServerName: serverAddr.String(),
 			}))
@@ -151,7 +164,7 @@ func (t *Transport) updateTransports(link *TransportLink) error {
 			} else {
 				serverName = serverAddr.String()
 			}
-			tlsConfig := common.Must1(tls.NewClient(t.ctx, serverAddr.String(), option.OutboundTLSOptions{
+			tlsConfig := common.Must1(tls.NewClient(t.ctx, t.logger, serverAddr.String(), option.OutboundTLSOptions{
 				Enabled:    true,
 				ServerName: serverName,
 			}))
@@ -179,6 +192,22 @@ func (t *Transport) deleteTransport(link *TransportLink) {
 		server.Close()
 	}
 	delete(t.linkServers, link)
+}
+
+func (t *Transport) PreferredDomain(domain string) bool {
+	t.service.linkAccess.RLock()
+	defer t.service.linkAccess.RUnlock()
+	for _, link := range t.service.links {
+		for _, linkDomain := range link.domain {
+			if linkDomain.Domain == "." {
+				continue
+			}
+			if strings.HasSuffix(domain, linkDomain.Domain) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (t *Transport) Exchange(ctx context.Context, message *mDNS.Msg) (*mDNS.Msg, error) {
@@ -238,7 +267,7 @@ func (t *Transport) tryOneName(ctx context.Context, servers *LinkServers, messag
 	sLen := uint32(len(servers.Servers))
 	var lastErr error
 	for i := 0; i < t.attempts; i++ {
-		for j := uint32(0); j < sLen; j++ {
+		for j := range sLen {
 			server := servers.Servers[(serverOffset+j)%sLen]
 			question := message.Question[0]
 			question.Name = fqdn

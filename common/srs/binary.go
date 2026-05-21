@@ -6,12 +6,15 @@ import (
 	"encoding/binary"
 	"io"
 	"net/netip"
+	"unsafe"
 
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common"
 	"github.com/sagernet/sing/common/domain"
 	E "github.com/sagernet/sing/common/exceptions"
+	"github.com/sagernet/sing/common/json/badjson"
+	"github.com/sagernet/sing/common/json/badoption"
 	"github.com/sagernet/sing/common/varbin"
 
 	"go4.org/netipx"
@@ -41,6 +44,9 @@ const (
 	ruleItemNetworkType
 	ruleItemNetworkIsExpensive
 	ruleItemNetworkIsConstrained
+	ruleItemNetworkInterfaceAddress
+	ruleItemDefaultInterfaceAddress
+	ruleItemPackageNameRegex
 	ruleItemFinal uint8 = 0xFF
 )
 
@@ -73,7 +79,7 @@ func Read(reader io.Reader, recover bool) (ruleSetCompat option.PlainRuleSetComp
 	}
 	ruleSetCompat.Version = version
 	ruleSetCompat.Options.Rules = make([]option.HeadlessRule, length)
-	for i := uint64(0); i < length; i++ {
+	for i := range length {
 		ruleSetCompat.Options.Rules[i], err = readRule(bReader, recover)
 		if err != nil {
 			err = E.Cause(err, "read rule[", i, "]")
@@ -210,6 +216,8 @@ func readDefaultRule(reader varbin.Reader, recover bool) (rule option.DefaultHea
 			rule.ProcessPathRegex, err = readRuleItemString(reader)
 		case ruleItemPackageName:
 			rule.PackageName, err = readRuleItemString(reader)
+		case ruleItemPackageNameRegex:
+			rule.PackageNameRegex, err = readRuleItemString(reader)
 		case ruleItemWIFISSID:
 			rule.WIFISSID, err = readRuleItemString(reader)
 		case ruleItemWIFIBSSID:
@@ -230,6 +238,51 @@ func readDefaultRule(reader varbin.Reader, recover bool) (rule option.DefaultHea
 			rule.NetworkIsExpensive = true
 		case ruleItemNetworkIsConstrained:
 			rule.NetworkIsConstrained = true
+		case ruleItemNetworkInterfaceAddress:
+			rule.NetworkInterfaceAddress = new(badjson.TypedMap[option.InterfaceType, badoption.Listable[*badoption.Prefixable]])
+			var size uint64
+			size, err = binary.ReadUvarint(reader)
+			if err != nil {
+				return
+			}
+			for i := uint64(0); i < size; i++ {
+				var key uint8
+				err = binary.Read(reader, binary.BigEndian, &key)
+				if err != nil {
+					return
+				}
+				var value []*badoption.Prefixable
+				var prefixCount uint64
+				prefixCount, err = binary.ReadUvarint(reader)
+				if err != nil {
+					return
+				}
+				for j := uint64(0); j < prefixCount; j++ {
+					var prefix netip.Prefix
+					prefix, err = readPrefix(reader)
+					if err != nil {
+						return
+					}
+					value = append(value, common.Ptr(badoption.Prefixable(prefix)))
+				}
+				rule.NetworkInterfaceAddress.Put(option.InterfaceType(key), value)
+			}
+		case ruleItemDefaultInterfaceAddress:
+			var value []*badoption.Prefixable
+			var prefixCount uint64
+			prefixCount, err = binary.ReadUvarint(reader)
+			if err != nil {
+				return
+			}
+			for j := uint64(0); j < prefixCount; j++ {
+				var prefix netip.Prefix
+				prefix, err = readPrefix(reader)
+				if err != nil {
+					return
+				}
+				value = append(value, common.Ptr(badoption.Prefixable(prefix)))
+			}
+			rule.DefaultInterfaceAddress = value
 		case ruleItemFinal:
 			err = binary.Read(reader, binary.BigEndian, &rule.Invert)
 			return
@@ -344,9 +397,18 @@ func writeDefaultRule(writer varbin.Writer, rule option.DefaultHeadlessRule, gen
 			return err
 		}
 	}
+	if len(rule.PackageNameRegex) > 0 {
+		if generateVersion < C.RuleSetVersion5 {
+			return E.New("`package_name_regex` rule item is only supported in version 5 or later")
+		}
+		err = writeRuleItemString(writer, ruleItemPackageNameRegex, rule.PackageNameRegex)
+		if err != nil {
+			return err
+		}
+	}
 	if len(rule.NetworkType) > 0 {
 		if generateVersion < C.RuleSetVersion3 {
-			return E.New("network_type rule item is only supported in version 3 or later")
+			return E.New("`network_type` rule item is only supported in version 3 or later")
 		}
 		err = writeRuleItemUint8(writer, ruleItemNetworkType, rule.NetworkType)
 		if err != nil {
@@ -354,15 +416,69 @@ func writeDefaultRule(writer varbin.Writer, rule option.DefaultHeadlessRule, gen
 		}
 	}
 	if rule.NetworkIsExpensive {
+		if generateVersion < C.RuleSetVersion3 {
+			return E.New("`network_is_expensive` rule item is only supported in version 3 or later")
+		}
 		err = binary.Write(writer, binary.BigEndian, ruleItemNetworkIsExpensive)
 		if err != nil {
 			return err
 		}
 	}
 	if rule.NetworkIsConstrained {
+		if generateVersion < C.RuleSetVersion3 {
+			return E.New("`network_is_constrained` rule item is only supported in version 3 or later")
+		}
 		err = binary.Write(writer, binary.BigEndian, ruleItemNetworkIsConstrained)
 		if err != nil {
 			return err
+		}
+	}
+	if rule.NetworkInterfaceAddress != nil && rule.NetworkInterfaceAddress.Size() > 0 {
+		if generateVersion < C.RuleSetVersion4 {
+			return E.New("`network_interface_address` rule item is only supported in version 4 or later")
+		}
+		err = writer.WriteByte(ruleItemNetworkInterfaceAddress)
+		if err != nil {
+			return err
+		}
+		_, err = varbin.WriteUvarint(writer, uint64(rule.NetworkInterfaceAddress.Size()))
+		if err != nil {
+			return err
+		}
+		for _, entry := range rule.NetworkInterfaceAddress.Entries() {
+			err = binary.Write(writer, binary.BigEndian, uint8(entry.Key.Build()))
+			if err != nil {
+				return err
+			}
+			_, err = varbin.WriteUvarint(writer, uint64(len(entry.Value)))
+			if err != nil {
+				return err
+			}
+			for _, rawPrefix := range entry.Value {
+				err = writePrefix(writer, rawPrefix.Build(netip.Prefix{}))
+				if err != nil {
+					return err
+				}
+			}
+		}
+	}
+	if len(rule.DefaultInterfaceAddress) > 0 {
+		if generateVersion < C.RuleSetVersion4 {
+			return E.New("`default_interface_address` rule item is only supported in version 4 or later")
+		}
+		err = writer.WriteByte(ruleItemDefaultInterfaceAddress)
+		if err != nil {
+			return err
+		}
+		_, err = varbin.WriteUvarint(writer, uint64(len(rule.DefaultInterfaceAddress)))
+		if err != nil {
+			return err
+		}
+		for _, rawPrefix := range rule.DefaultInterfaceAddress {
+			err = writePrefix(writer, rawPrefix.Build(netip.Prefix{}))
+			if err != nil {
+				return err
+			}
 		}
 	}
 	if len(rule.WIFISSID) > 0 {
@@ -402,7 +518,24 @@ func writeDefaultRule(writer varbin.Writer, rule option.DefaultHeadlessRule, gen
 }
 
 func readRuleItemString(reader varbin.Reader) ([]string, error) {
-	return varbin.ReadValue[[]string](reader, binary.BigEndian)
+	length, err := binary.ReadUvarint(reader)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]string, length)
+	for i := range result {
+		strLen, err := binary.ReadUvarint(reader)
+		if err != nil {
+			return nil, err
+		}
+		buf := make([]byte, strLen)
+		_, err = io.ReadFull(reader, buf)
+		if err != nil {
+			return nil, err
+		}
+		result[i] = string(buf)
+	}
+	return result, nil
 }
 
 func writeRuleItemString(writer varbin.Writer, itemType uint8, value []string) error {
@@ -410,11 +543,34 @@ func writeRuleItemString(writer varbin.Writer, itemType uint8, value []string) e
 	if err != nil {
 		return err
 	}
-	return varbin.Write(writer, binary.BigEndian, value)
+	_, err = varbin.WriteUvarint(writer, uint64(len(value)))
+	if err != nil {
+		return err
+	}
+	for _, s := range value {
+		_, err = varbin.WriteUvarint(writer, uint64(len(s)))
+		if err != nil {
+			return err
+		}
+		_, err = writer.Write([]byte(s))
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func readRuleItemUint8[E ~uint8](reader varbin.Reader) ([]E, error) {
-	return varbin.ReadValue[[]E](reader, binary.BigEndian)
+	length, err := binary.ReadUvarint(reader)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]E, length)
+	_, err = io.ReadFull(reader, *(*[]byte)(unsafe.Pointer(&result)))
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 func writeRuleItemUint8[E ~uint8](writer varbin.Writer, itemType uint8, value []E) error {
@@ -422,11 +578,25 @@ func writeRuleItemUint8[E ~uint8](writer varbin.Writer, itemType uint8, value []
 	if err != nil {
 		return err
 	}
-	return varbin.Write(writer, binary.BigEndian, value)
+	_, err = varbin.WriteUvarint(writer, uint64(len(value)))
+	if err != nil {
+		return err
+	}
+	_, err = writer.Write(*(*[]byte)(unsafe.Pointer(&value)))
+	return err
 }
 
 func readRuleItemUint16(reader varbin.Reader) ([]uint16, error) {
-	return varbin.ReadValue[[]uint16](reader, binary.BigEndian)
+	length, err := binary.ReadUvarint(reader)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]uint16, length)
+	err = binary.Read(reader, binary.BigEndian, result)
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 func writeRuleItemUint16(writer varbin.Writer, itemType uint8, value []uint16) error {
@@ -434,7 +604,11 @@ func writeRuleItemUint16(writer varbin.Writer, itemType uint8, value []uint16) e
 	if err != nil {
 		return err
 	}
-	return varbin.Write(writer, binary.BigEndian, value)
+	_, err = varbin.WriteUvarint(writer, uint64(len(value)))
+	if err != nil {
+		return err
+	}
+	return binary.Write(writer, binary.BigEndian, value)
 }
 
 func writeRuleItemCIDR(writer varbin.Writer, itemType uint8, value []string) error {
@@ -482,7 +656,7 @@ func readLogicalRule(reader varbin.Reader, recovery bool) (logicalRule option.Lo
 		return
 	}
 	logicalRule.Rules = make([]option.HeadlessRule, length)
-	for i := uint64(0); i < length; i++ {
+	for i := range length {
 		logicalRule.Rules[i], err = readRule(reader, recovery)
 		if err != nil {
 			err = E.Cause(err, "read logical rule [", i, "]")

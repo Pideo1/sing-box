@@ -2,6 +2,24 @@
 icon: material/new-box
 ---
 
+!!! quote "Changes in sing-box 1.14.0"
+
+    :material-plus: [include_mac_address](#include_mac_address)  
+    :material-plus: [exclude_mac_address](#exclude_mac_address)  
+    :material-plus: [dns_mode](#dns_mode)  
+    :material-plus: [dns_address](#dns_address)
+
+!!! quote "Changes in sing-box 1.13.3"
+
+    :material-alert: [strict_route](#strict_route)
+
+!!! quote "Changes in sing-box 1.13.0"
+
+    :material-plus: [auto_redirect_reset_mark](#auto_redirect_reset_mark)  
+    :material-plus: [auto_redirect_nfqueue](#auto_redirect_nfqueue)  
+    :material-plus: [exclude_mptcp](#exclude_mptcp)  
+    :material-plus: [auto_redirect_iproute2_fallback_rule_index](#auto_redirect_iproute2_fallback_rule_index)
+
 !!! quote "Changes in sing-box 1.12.0"
 
     :material-plus: [loopback_address](#loopback_address)
@@ -34,7 +52,7 @@ icon: material/new-box
 !!! quote "Changes in sing-box 1.9.0"
 
     :material-plus: [platform.http_proxy.bypass_domain](#platformhttp_proxybypass_domain)  
-    :material-plus: [platform.http_proxy.match_domain](#platformhttp_proxymatch_domain)  
+    :material-plus: [platform.http_proxy.match_domain](#platformhttp_proxymatch_domain)
 
 !!! quote "Changes in sing-box 1.8.0"
 
@@ -57,12 +75,21 @@ icon: material/new-box
     "fdfe:dcba:9876::1/126"
   ],
   "mtu": 9000,
+  "dns_mode": "hijack",
+  "dns_address": [
+    "172.18.0.2",
+    "fdfe:dcba:9876::2"
+  ],
   "auto_route": true,
   "iproute2_table_index": 2022,
   "iproute2_rule_index": 9000,
   "auto_redirect": true,
   "auto_redirect_input_mark": "0x2023",
   "auto_redirect_output_mark": "0x2024",
+  "auto_redirect_reset_mark": "0x2025",
+  "auto_redirect_nfqueue": 100,
+  "auto_redirect_iproute2_fallback_rule_index": 32768,
+  "exclude_mptcp": false,
   "loopback_address": [
     "10.7.0.1"
   ],
@@ -113,6 +140,12 @@ icon: material/new-box
   ],
   "exclude_package": [
     "com.android.captiveportallogin"
+  ],
+  "include_mac_address": [
+    "00:11:22:33:44:55"
+  ],
+  "exclude_mac_address": [
+    "66:77:88:99:aa:bb"
   ],
   "platform": {
     "http_proxy": {
@@ -189,6 +222,52 @@ IPv6 prefix for the tun interface.
 #### mtu
 
 The maximum transmission unit.
+
+#### dns_mode
+
+!!! question "Since sing-box 1.14.0"
+
+How DNS is handled on the TUN interface.
+
+| Mode       | Description                                                                                                                                                |
+|------------|------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `disabled` | Do not configure native DNS and do not hijack DNS traffic.                                                                                                 |
+| `native`   | Set the platform's native interface DNS where possible: per-interface DNS on Windows and Apple platforms, and `systemd-resolved` interface DNS on Linux.   |
+| `hijack`   | Same as `native`, with additional port 53 hijacking described below. Used by default.                                                                      |
+
+`hijack` adds the following on top of `native`:
+
+*On Linux*: only DNS sent to non-local destinations can be intercepted.
+Traffic destined to addresses on the host's own interfaces (such as
+`127.0.0.53` or the host's LAN-side IP) is delivered through the kernel
+`local` routing table before any user rule applies, and `OUTPUT` NAT cannot
+redirect packets going through `lo`.
+
+- Without `auto_redirect`, an `iproute2` rule makes port 53 skip the `main`
+  table's specific-route lookup, forcing DNS that would otherwise be
+  delivered through a directly-attached subnet through the TUN. Destination
+  addresses are not rewritten.
+- With `auto_redirect`, an nftables rule DNATs port 53 traffic directly to
+  [`dns_address`](#dns_address).
+
+*On Windows with [`strict_route`](#strict_route)*: a WFP filter blocks port
+53 traffic going through interfaces other than the TUN.
+
+#### dns_address
+
+!!! question "Since sing-box 1.14.0"
+
+List of DNS server addresses used by [`dns_mode`](#dns_mode).
+
+When unset, sing-box derives one address per family by taking the next IP after
+the first IPv4/IPv6 entry in [`address`](#address). Connections toward those
+derived addresses are additionally hijacked into the sing-box DNS module,
+equivalent to a [`hijack-dns`](/configuration/route/rule_action/#hijack-dns)
+route action; this preserves the behaviour from before this option was added.
+
+When set, this auto-hijack is not applied; configure an explicit
+[`hijack-dns`](/configuration/route/rule_action/#hijack-dns) route rule if the
+behaviour is still required.
 
 #### gso
 
@@ -278,6 +357,47 @@ Connection output mark used by `auto_redirect`.
 
 `0x2024` is used by default.
 
+#### auto_redirect_reset_mark
+
+!!! question "Since sing-box 1.13.0"
+
+Connection reset mark used by `auto_redirect` pre-matching.
+
+`0x2025` is used by default.
+
+#### auto_redirect_nfqueue
+
+!!! question "Since sing-box 1.13.0"
+
+NFQueue number used by `auto_redirect` pre-matching.
+
+`100` is used by default.
+
+#### auto_redirect_iproute2_fallback_rule_index
+
+!!! question "Since sing-box 1.12.18"
+
+Linux iproute2 fallback rule index generated by `auto_redirect`.
+
+This rule is checked after system default rules (32766: main, 32767: default),
+routing traffic to the sing-box table only when no route is found in system tables.
+
+`32768` is used by default.
+
+#### exclude_mptcp
+
+!!! question "Since sing-box 1.13.0"
+
+!!! quote ""
+
+    Only supported on Linux with nftables and requires `auto_route` and `auto_redirect` enabled.
+
+MPTCP cannot be transparently proxied due to protocol limitations.
+
+Such traffic is usually created by Apple systems.
+
+When enabled, MPTCP connections will bypass sing-box and connect directly, otherwise, will be rejected to avoid errors by default.
+
 #### loopback_address
 
 !!! question "Since sing-box 1.12.0"
@@ -296,6 +416,9 @@ Enforce strict routing rules when `auto_route` is enabled:
 
 * Let unsupported network unreachable
 * For legacy reasons, when neither `strict_route` nor `auto_redirect` are enabled, all ICMP traffic will not go through TUN.
+* When `auto_redirect` is enabled, `strict_route` also affects `SO_BINDTODEVICE` traffic:
+    * Enabled: `SO_BINDTODEVICE` traffic is redirected through sing-box.
+    * Disabled: `SO_BINDTODEVICE` traffic bypasses sing-box.
 
 *In Windows*:
 
@@ -495,6 +618,30 @@ Limit android packages in route.
 #### exclude_package
 
 Exclude android packages in route.
+
+#### include_mac_address
+
+!!! question "Since sing-box 1.14.0"
+
+!!! quote ""
+
+    Only supported on Linux with `auto_route` and `auto_redirect` enabled.
+
+Limit MAC addresses in route. Not limited by default.
+
+Conflict with `exclude_mac_address`.
+
+#### exclude_mac_address
+
+!!! question "Since sing-box 1.14.0"
+
+!!! quote ""
+
+    Only supported on Linux with `auto_route` and `auto_redirect` enabled.
+
+Exclude MAC addresses in route.
+
+Conflict with `include_mac_address`.
 
 #### platform
 
