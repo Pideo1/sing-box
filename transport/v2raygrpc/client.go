@@ -67,6 +67,7 @@ func NewClient(ctx context.Context, dialer N.Dialer, serverAddr M.Socksaddr, opt
 	}))
 	//nolint:staticcheck
 	dialOptions = append(dialOptions, grpc.WithReturnConnectionError())
+	dialOptions = append(dialOptions, grpc.WithUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/141.0 Safari/537.36"))
 	return &Client{
 		ctx:         ctx,
 		dialer:      dialer,
